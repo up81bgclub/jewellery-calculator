@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../firebase/firebaseConfig';
+import { auth, db } from '../firebase/firebaseConfig';
 import { collection, addDoc, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
 
 const JewelleryCalculator = ({ userRole, userName }) => {
   // Top Bar Rates
-  const [rate22k, setRate22k] = useState('75000');
-  const [rate18k, setRate18k] = useState('62000');
-  const [rate14k, setRate14k] = useState('50000');
-  const [rateSilver, setRateSilver] = useState('90000');
+  const [rate22k, setRate22k] = useState(() => localStorage.getItem('rate22k') || '00');
+  const [rate18k, setRate18k] = useState(() => localStorage.getItem('rate18k') || '00');
+  const [rate14k, setRate14k] = useState(() => localStorage.getItem('rate14k') || '00');
+  const [rateSilver, setRateSilver] = useState(() => localStorage.getItem('rateSilver') || '00');
 
   // Tabs & Views
   const [activeTab, setActiveTab] = useState('gold');
-  const [showAllData, setShowAllData] = useState(false); // Page toggle logic
+  const [showAllData, setShowAllData] = useState(false);
 
   // Form Fields
   const [itemName, setItemName] = useState('');
@@ -28,21 +28,39 @@ const JewelleryCalculator = ({ userRole, userName }) => {
   const [selectedItem, setSelectedItem] = useState(null);
   const [error, setError] = useState('');
 
-  // Checkbox & Custom Calculator States (For Today's Data Only)
+  // Checkbox & Custom Calculator States
   const [selectedItemIds, setSelectedItemIds] = useState([]);
   const [minusAmount, setMinusAmount] = useState('');
 
-  // Fetch Live Data from Firestore
+  // 1. Fetch Live Data from Firestore (FILTERED FOR STAFF)
   useEffect(() => {
+    if (!auth.currentUser) return;
+
     const calcRef = collection(db, "jewellery_calculations");
     const unsubscribe = onSnapshot(calcRef, (snapshot) => {
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      // Sorting by date new to old
-      list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-      setCalculations(list);
+
+      // Admin ko saara data dikhega, Staff ko sirf KHUD KA data
+      const filteredList = userRole === 'admin'
+        ? list
+        : list.filter(item => item.userId === auth.currentUser.uid);
+
+      // Latest items pehle
+      filteredList.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+      // FIX: Yahan filteredList set karna zaroori tha
+      setCalculations(filteredList);
     });
     return () => unsubscribe();
-  }, []);
+  }, [userRole]);
+
+  // Save Rates to LocalStorage
+  useEffect(() => {
+    localStorage.setItem('rate22k', rate22k);
+    localStorage.setItem('rate18k', rate18k);
+    localStorage.setItem('rate14k', rate14k);
+    localStorage.setItem('rateSilver', rateSilver);
+  }, [rate22k, rate18k, rate14k, rateSilver]);
 
   // Filter Functions
   const isToday = (dateString) => {
@@ -54,10 +72,9 @@ const JewelleryCalculator = ({ userRole, userName }) => {
   const todaysCalculations = calculations.filter(c => isToday(c.createdAt));
   const olderCalculations = calculations.filter(c => !isToday(c.createdAt));
   
-  // Active rendering list based on current view page toggle
   const displayedList = showAllData ? olderCalculations : todaysCalculations;
 
-  // Handle Checkbox Selection
+  // Checkbox Selection Logic
   const handleCheckboxChange = (id) => {
     if (selectedItemIds.includes(id)) {
       setSelectedItemIds(selectedItemIds.filter(itemId => itemId !== id));
@@ -66,7 +83,6 @@ const JewelleryCalculator = ({ userRole, userName }) => {
     }
   };
 
-  // Live Checkbox Calculations
   const selectedItemsSum = todaysCalculations
     .filter(item => selectedItemIds.includes(item.id))
     .reduce((sum, item) => sum + (item.grandTotal || 0), 0);
@@ -74,7 +90,7 @@ const JewelleryCalculator = ({ userRole, userName }) => {
   const discountValue = parseFloat(minusAmount) || 0;
   const finalCalculatedTotal = Math.max(0, selectedItemsSum - discountValue);
 
-  // Calculate & Save Logic
+  // 2. Calculate & Save Logic (WITH PROPER STAFF NAME)
   const handleCalculateAndSave = async (e) => {
     e.preventDefault();
     setError('');
@@ -114,6 +130,11 @@ const JewelleryCalculator = ({ userRole, userName }) => {
     const gst3 = totalBeforeTax * 0.03;
     const grandTotal = totalBeforeTax + gst3;
 
+    // FIX: Staff ka Name proper nikalne ke liye
+    const currentStaffName = userName 
+      || auth.currentUser?.displayName 
+      || (auth.currentUser?.email ? auth.currentUser.email.split('@')[0] : "Staff");
+
     try {
       await addDoc(collection(db, "jewellery_calculations"), {
         type: activeTab,
@@ -128,7 +149,8 @@ const JewelleryCalculator = ({ userRole, userName }) => {
         totalBeforeTax,
         gst: gst3,
         grandTotal,
-        addedByName: userName || "Staff",
+        userId: auth.currentUser ? auth.currentUser.uid : 'unknown',
+        addedByName: currentStaffName,
         createdAt: new Date().toISOString()
       });
 
@@ -268,9 +290,8 @@ const JewelleryCalculator = ({ userRole, userName }) => {
         </button>
       </div>
 
-      {/* 4. Live Data View & Custom Counter Display */}
+      {/* 4. Live Data View */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Table View */}
         <div className="lg:col-span-2 space-y-4">
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="overflow-x-auto">
@@ -278,6 +299,7 @@ const JewelleryCalculator = ({ userRole, userName }) => {
                 <thead className="bg-slate-800 text-white text-xs uppercase">
                   <tr>
                     {!showAllData && <th className="p-3 w-10 text-center">Select</th>}
+                    <th className='px-4 py-2 text-left'>Staff Name</th>
                     <th className="p-3">Item Name</th>
                     <th className="p-3">Type</th>
                     <th className="p-3">WT (gm)</th>
@@ -287,24 +309,25 @@ const JewelleryCalculator = ({ userRole, userName }) => {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {displayedList.length === 0 ? (
-                    <tr><td colSpan="6" className="text-center py-6 text-gray-400">Is page par koi data nahi mila.</td></tr>
+                    <tr><td colSpan="7" className="text-center py-6 text-gray-400">Is page par koi data nahi mila.</td></tr>
                   ) : (
                     displayedList.map((calc) => (
                       <tr key={calc.id} className="hover:bg-slate-50 transition-colors">
                         {!showAllData && (
                           <td className="p-3 text-center">
-                            <input 
-                              type="checkbox" 
+                            <input
+                              type="checkbox"
                               checked={selectedItemIds.includes(calc.id)}
                               onChange={() => handleCheckboxChange(calc.id)}
                               className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 border-gray-300 cursor-pointer"
                             />
                           </td>
                         )}
+                        <td className='px-3 py-2 font-semibold text-blue-600'>{calc.addedByName || 'Staff'}</td>
                         <td className="p-3 font-semibold text-gray-900">{calc.itemName}</td>
                         <td className="p-3"><span className="text-xs px-2 py-0.5 font-bold uppercase rounded bg-amber-100 text-amber-800">{calc.type}</span></td>
-                        <td className="p-3 font-medium">{calc.weight.toFixed(3)} gm</td>
-                        <td className="p-3 font-bold text-emerald-600">₹{calc.grandTotal.toFixed(1)}</td>
+                        <td className="p-3 font-medium">{calc.weight ? calc.weight.toFixed(3) : '0.000'} gm</td>
+                        <td className="p-3 font-bold text-emerald-600">₹{calc.grandTotal ? calc.grandTotal.toFixed(1) : '0.0'}</td>
                         <td className="p-3 text-right space-x-2">
                           <button onClick={() => setSelectedItem(calc)} className="bg-slate-900 text-white text-xs px-2.5 py-1 rounded font-semibold hover:bg-slate-700">Show</button>
                           {userRole === 'admin' && <button onClick={() => handleDelete(calc.id)} className="bg-rose-600 text-white text-xs px-2.5 py-1 rounded font-semibold hover:bg-rose-700">Delete</button>}
@@ -317,15 +340,15 @@ const JewelleryCalculator = ({ userRole, userName }) => {
             </div>
           </div>
 
-          {/* CHECKBOX DYNAMIC COUNTER SUM SCREEN (Visible on Today's Page Only) */}
+          {/* CHECKBOX DYNAMIC COUNTER DISPLAY */}
           {!showAllData && todaysCalculations.length > 0 && (
             <div className="bg-slate-900 text-white p-5 rounded-xl shadow-lg border border-slate-700 space-y-4">
               <div className="flex justify-between items-center">
                 <h4 className="font-bold text-sm tracking-wide text-slate-300">
                   🔢 Checkbox Total Calculator ({selectedItemIds.length} Items Selected)
                 </h4>
-                <button 
-                  onClick={() => { setSelectedItemIds([]); setMinusAmount(''); }} 
+                <button
+                  onClick={() => { setSelectedItemIds([]); setMinusAmount(''); }}
                   className="text-xs font-bold text-rose-400 hover:text-rose-300"
                 >
                   Clear Selection
@@ -335,16 +358,16 @@ const JewelleryCalculator = ({ userRole, userName }) => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center pt-2">
                 <div>
                   <span className="block text-xs text-slate-400 mb-1">Selected Items Sum</span>
-                  <span className="text-xl fo                                          nt-bold text-yellow-400">₹{selectedItemIds.length > 0 ? selectedItemsSum.toFixed(1) : '0.0'}</span>
+                  <span className="text-xl font-bold text-yellow-400">₹{selectedItemIds.length > 0 ? selectedItemsSum.toFixed(1) : '0.0'}</span>
                 </div>
 
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Minus Amount / Discount (Optional)</label>
-                  <input 
-                    type="number" 
-                    value={minusAmount} 
-                    onChange={(e) => setMinusAmount(e.target.value)} 
-                    placeholder="₹ Entering Amount to Minus" 
+                  <input
+                    type="number"
+                    value={minusAmount}
+                    onChange={(e) => setMinusAmount(e.target.value)}
+                    placeholder="₹ Entering Amount to Minus"
                     className="w-full bg-slate-800 border border-slate-700 text-sm text-white px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500"
                   />
                 </div>
@@ -364,16 +387,16 @@ const JewelleryCalculator = ({ userRole, userName }) => {
           {selectedItem ? (
             <div className="divide-y divide-gray-200 bg-slate-900 text-slate-100 text-sm">
               <div className="flex justify-between p-3"><span className="text-slate-400">Item Name</span><span className="font-bold text-amber-400">{selectedItem.itemName}</span></div>
-              <div className="flex justify-between p-3"><span className="text-slate-400">Weight</span><span className="font-bold">{selectedItem.weight.toFixed(3)} gm</span></div>
+              <div className="flex justify-between p-3"><span className="text-slate-400">Weight</span><span className="font-bold">{selectedItem.weight ? selectedItem.weight.toFixed(3) : '0'} gm</span></div>
               <div className="flex justify-between p-3"><span className="text-slate-400">Rate</span><span className="font-bold">₹{selectedItem.rate}</span></div>
-              <div className="flex justify-between p-3"><span className="text-slate-400">Gold/Metal Amount</span><span className="font-bold text-yellow-400">₹{selectedItem.goldAmount.toFixed(1)}</span></div>
-              <div className="flex justify-between p-3"><span className="text-slate-400">MKG Charges</span><span className="font-bold">₹{selectedItem.mkg.toFixed(1)}</span></div>
+              <div className="flex justify-between p-3"><span className="text-slate-400">Gold/Metal Amount</span><span className="font-bold text-yellow-400">₹{selectedItem.goldAmount ? selectedItem.goldAmount.toFixed(1) : '0'}</span></div>
+              <div className="flex justify-between p-3"><span className="text-slate-400">MKG Charges</span><span className="font-bold">₹{selectedItem.mkg ? selectedItem.mkg.toFixed(1) : '0'}</span></div>
               <div className="flex justify-between p-3"><span className="text-slate-400">ST AMT (Stones)</span><span className="font-bold">{selectedItem.stoneAmount ? `₹${selectedItem.stoneAmount.toFixed(1)}` : 'null'}</span></div>
               <div className="flex justify-between p-3"><span className="text-slate-400">Diamond Amount</span><span className="font-bold">{selectedItem.diamondAmount ? `₹${selectedItem.diamondAmount.toFixed(1)}` : 'null'}</span></div>
-              <div className="flex justify-between p-3 bg-slate-800"><span className="text-slate-300 font-semibold">Total (Before Tax)</span><span className="font-bold">₹{selectedItem.totalBeforeTax.toFixed(2)}</span></div>
-              <div className="flex justify-between p-3"><span className="text-slate-400">GST 3%</span><span className="font-bold text-rose-400">₹{selectedItem.gst.toFixed(1)}</span></div>
-              <div className="flex justify-between p-4 bg-slate-950 border-t border-amber-500"><span className="text-amber-400 font-extrabold text-base">Grand Total</span><span className="font-black text-emerald-400 text-lg">₹{selectedItem.grandTotal.toFixed(1)}</span></div>
-              <div className="p-2 bg-slate-800 text-center text-xs text-slate-400">Calculated By: {selectedItem.addedByName}</div>
+              <div className="flex justify-between p-3 bg-slate-800"><span className="text-slate-300 font-semibold">Total (Before Tax)</span><span className="font-bold">₹{selectedItem.totalBeforeTax ? selectedItem.totalBeforeTax.toFixed(2) : '0'}</span></div>
+              <div className="flex justify-between p-3"><span className="text-slate-400">GST 3%</span><span className="font-bold text-rose-400">₹{selectedItem.gst ? selectedItem.gst.toFixed(1) : '0'}</span></div>
+              <div className="flex justify-between p-4 bg-slate-950 border-t border-amber-500"><span className="text-amber-400 font-extrabold text-base">Grand Total</span><span className="font-black text-emerald-400 text-lg">₹{selectedItem.grandTotal ? selectedItem.grandTotal.toFixed(1) : '0'}</span></div>
+              <div className="p-2 bg-slate-800 text-center text-xs text-slate-400">Calculated By: {selectedItem.addedByName || 'Staff'}</div>
             </div>
           ) : (
             <div className="p-12 text-center text-sm text-gray-400 bg-gray-50 italic">List mein se kisi item ke "Show" button par click karke breakdown dekhein.</div>

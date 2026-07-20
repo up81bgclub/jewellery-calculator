@@ -1,16 +1,46 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { auth } from './firebase/firebaseConfig';
 import SignUp from './components/SignUp';
 import Login from './components/Login';
 import Customers from './components/Customers';
 import JewelleryCalculator from './components/JewelleryCalculator';
+import { onAuthStateChanged } from 'firebase/auth';
 
 function App() {
   const [loggedInUser, setLoggedInUser] = useState(null);
   const [isSignUpPage, setIsSignUpPage] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        setLoggedInUser({
+          uid: currentUser.uid,
+          name: currentUser.displayName || 'Staff',
+          role: currentUser.role || 'staff',
+          email: currentUser.email
+        });
+      } else {
+        setLoggedInUser(null);
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [])
 
   const handleLogout = () => {
-    setLoggedInUser(null);
+    auth.signOut().then(() => {
+      setLoggedInUser(null);
+    });
   };
+
+  if(loading) {
+    return(
+      <div className='flex items-center justify-center h-screen bg-slate-900 text-white'>
+        <div className='font-bold animate-pluse'>Setting up secure session...</div>
+      </div>
+    )
+  }
 
   if (!loggedInUser) {
     return (
@@ -69,8 +99,8 @@ function App() {
         )}
 
         <div className="mt-8 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-          <Customers userRole={loggedInUser.role} userId={loggedInUser.uid} userName={loggedInUser.name}></Customers>
-          <JewelleryCalculator userRole={loggedInUser.role} userName={loggedInUser.name}></JewelleryCalculator>
+          <Customers userRole={loggedInUser.role} userId={loggedInUser.uid} userName={loggedInUser.displayName}></Customers>
+          <JewelleryCalculator userRole={loggedInUser.role} userName={loggedInUser.displayName}></JewelleryCalculator>
         </div>
       </main>
     </div>
